@@ -209,7 +209,7 @@ def check_songs(songs_dir) -> Tuple[List[str], List[str]]:
         try:
             same, message, notes_list = compare_difficulty([os.path.join(songs_dir, song, f) for f in files])
         except Exception as e:
-            messages.append(f'Error reading {song}: {e}')
+            messages.append(f'{song} Read error: {e}')
             continue
         if message.startswith('Length mismatch'):
             messages.append(f'{song} {message}')
@@ -222,7 +222,7 @@ def check_songs(songs_dir) -> Tuple[List[str], List[str]]:
             for notes in notes_list:
                 _ = list_to_midi(notes)
         except Exception as e:
-            messages.append(f'Error converting {song}: {e}')
+            messages.append(f'{song} Conversion error: {e}')
             continue
     # Print the messages
     for message in messages:
