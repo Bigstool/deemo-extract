@@ -1,5 +1,6 @@
 import json
 import os
+import argparse
 import mido
 
 from typing import Tuple, List
@@ -195,33 +196,37 @@ def check_songs(songs_dir) -> Tuple[List[str], List[str]]:
     songs = os.listdir(songs_dir)
     length_mismatch_songs = []
     notes_mismatch_songs = []
-    for song in songs:
+    messages = []
+    for song in tqdm(songs):
         files = os.listdir(os.path.join(songs_dir, song))
         # Only keep the json files
         files = filter_files(files)
         # Check the number of difficulties
         if len(files) < 2:
-            print(f'{song} has less than 2 difficulties.')
+            messages.append(f'{song} has less than 2 difficulties.')
             continue
         # Attempt to extract the notes from the json files and compare them
         try:
             same, message, notes_list = compare_difficulty([os.path.join(songs_dir, song, f) for f in files])
         except Exception as e:
-            print(f'Error reading {song}: {e}')
+            messages.append(f'Error reading {song}: {e}')
             continue
         if message.startswith('Length mismatch'):
-            # print(f'{song} {message}')
+            messages.append(f'{song} {message}')
             length_mismatch_songs.append(song)
         if message.startswith('Notes mismatch'):
-            # print(f'{song} {message}')
+            messages.append(f'{song} {message}')
             notes_mismatch_songs.append(song)
         # Attempt to convert the notes to midi
         try:
             for notes in notes_list:
                 _ = list_to_midi(notes)
         except Exception as e:
-            print(f'Error converting {song}: {e}')
+            messages.append(f'Error converting {song}: {e}')
             continue
+    # Print the messages
+    for message in messages:
+        print(message)
     # Deduplicate the mismatched songs
     length_mismatch_songs = list(set(length_mismatch_songs))
     notes_mismatch_songs = list(set(notes_mismatch_songs))
@@ -268,20 +273,38 @@ def extract_songs(songs_dir, output_dir, one_only=False):
 
 
 def main():
-    # # Single song test
-    # with open('../songs5/hard.json', 'r') as f:
-    #     deemo_notes = json.load(f)
-    # notes = extract_one(deemo_notes)
-    # midi = list_to_midi(notes)
-    # midi.save('test.mid')
+    parser = argparse.ArgumentParser(description='Extract Deemo songs to midi files.')
+    # Either --single, --check, or --extract must be specified
+    group = parser.add_mutually_exclusive_group(required=True)
+    # Single takes 2 arguments: the path to the Deemo song json file and the path to the output midi file
+    group.add_argument('--single', nargs=2, metavar=('song_path', 'output_path'),
+                       help='Extract a single Deemo song to a midi file.')
+    # Check takes 1 argument: the path to the directory containing the Deemo songs
+    group.add_argument('--check', nargs=1, metavar='songs_dir',
+                       help='A dry run to check if the songs can be extracted to midi files.')
+    # Extract takes 3 arguments: the Deemo songs path and the output directory path
+    group.add_argument('--extract', nargs=2, metavar=('songs_dir', 'output_dir'),
+                       help='Extract all the Deemo songs in the directory to midi files.')
+    # One only flag
+    parser.add_argument('--one_only', action='store_true', required=False,
+                        help='Only convert one difficulty to midi even if the notes are not the same. '
+                             'Uses the difficulty with the most number of notes. '
+                             'In case of a tie, any one may be chosen. '
+                             'Defaults to False.')
+    args = parser.parse_args()
 
-    # # Check the songs
-    # _ = check_songs('../songs5')
+    if args.single:
+        deemo_notes = load_json(args.single[0])
+        notes = extract_one(deemo_notes)
+        midi = list_to_midi(notes)
+        midi.save(args.single[1])
+    elif args.check:
+        _ = check_songs(args.check[0])
+    elif args.extract:
+        extract_songs(args.extract[0], args.extract[1], one_only=args.one_only)
+    else:
+        raise ValueError('Invalid arguments.')
 
-    # Extract the songs
-    extract_songs('../songs5', './extracted/one_only', one_only=True)
-
-    pass
 
 if __name__ == '__main__':
     main()
