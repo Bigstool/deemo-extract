@@ -2,6 +2,7 @@ import json
 import os
 import mido
 
+from typing import Tuple, List
 from math import isclose
 from tqdm import tqdm
 
@@ -21,6 +22,9 @@ def extract_one(deemo: dict) -> list:
     for deemo_note in deemo_notes:
         # Skip if there is no sounds
         if 'sounds' not in deemo_note.keys():
+            continue
+        # Skip if sounds is None
+        if deemo_note['sounds'] is None:
             continue
         # Handle missing _time at the start of the song
         time = 0
@@ -44,7 +48,11 @@ def extract_one(deemo: dict) -> list:
                 duration = sound['d']
             off_time = on_time + duration
             pitch = sound['p']
-            velocity = sound['v']
+            # Handle v lower than 0
+            # For some reason, there are notes with velocity lower than 0.
+            # It is assumed that they don't make any sound, so we set them to 0.
+            # However, if this assumption is wrong, then the velocity of these notes would be wrong.
+            velocity = sound['v'] if 0 <= sound['v'] <= 127 else 0
             converted_notes.append([on_time, off_time, pitch, velocity])
     # Sort the notes by on_time, then by ascending pitch
     converted_notes.sort(key=lambda x: (x[0], x[2]))
@@ -74,17 +82,17 @@ def save_json(converted_notes, filename):
         json.dump(converted_notes, f, indent=2)
 
 
-def is_equal(notes_a, notes_b):
+def is_equal(notes_a, notes_b) -> Tuple[bool, str]:
     """
     Compares two lists of notes and returns True if they are equal, False otherwise.
 
     :param notes_a: list of notes
     :param notes_b: list of notes
-    :return: True if notes_a == notes_b, False otherwise
+    :return: A tuple of (bool, str), where the first element is True if the notes are equal, False otherwise,
+             and the second element is a message indicating the result of the comparison.
     """
     if len(notes_a) != len(notes_b):
-        print(f'Length mismatch: {len(notes_a)} != {len(notes_b)}')
-        return False
+        return False, f'Length mismatch: {len(notes_a)} != {len(notes_b)}'
     num_unmatch = 0
     for i in range(len(notes_a)):
         if not isclose(notes_a[i][0], notes_b[i][0], rel_tol=1e-5) or \
@@ -95,9 +103,8 @@ def is_equal(notes_a, notes_b):
             # print(f'Mismatch at index {i}:\n{notes_a[i]}\n{notes_b[i]}')
 
     if num_unmatch > 0:
-        # print(f'{num_unmatch}/{len(notes_a)} ({num_unmatch / len(notes_a) * 100:.2f}%) notes do not match.')
-        return False
-    return True
+        return False, f'Notes mismatch: {num_unmatch}/{len(notes_a)} ({num_unmatch / len(notes_a) * 100:.2f}%) notes.'
+    return True, 'Notes are equal.'
 
 
 def list_to_midi(notes) -> mido.MidiFile:
@@ -146,53 +153,84 @@ def list_to_midi(notes) -> mido.MidiFile:
     return mid
 
 
-def compare_difficulty_old(songs_dir):
+def filter_files(files: List[str]) -> List[str]:
+    """
+    Filters the files to only keep the song json files.
+
+    :param files: A list of file names.
+    :return: A list of file names that are json files.
+    """
+    allowed_extensions = ['.json', '.txt']
+    return [f for f in files if os.path.splitext(f)[1] in allowed_extensions]
+
+
+def compare_difficulty(song_paths) -> Tuple[bool, str, List[List[list]]]:
+    """
+    Checks whether the notes of different difficulties of a single song are the same.
+
+    :param song_paths: A list of paths to the json files of the different difficulties of a single song.
+    :return: A tuple of (bool, str, List[List[list]]), where the first element is True if the notes are equal,
+             False otherwise, the second element is a message indicating the result of the comparison,
+             and the third element is a list of the extracted notes of the different difficulties.
+    """
+    notes_list = [extract_one(load_json(song_path)) for song_path in song_paths]
+    # Compare the i-th difficulty with the (i+1)-th difficulty
+    for i in range(len(notes_list) - 1):
+        equal, message = is_equal(notes_list[i], notes_list[i + 1])
+        if not equal:
+            return False, message, notes_list
+    return True, 'Notes are equal.', notes_list
+
+
+def check_songs(songs_dir) -> Tuple[List[str], List[str]]:
     """
     Iterates through all the songs in the directory and compares the notes of different difficulties
     to see if they are the same.
 
     :param songs_dir: The directory containing the Deemo songs.
-    :return: None
+    :return: A tuple of (List[str], List[str]), where the first element is a list of songs that have difficulties
+             with different lengths, and the second element is a list of songs that have difficulties with different
+             notes.
     """
     songs = os.listdir(songs_dir)
-    mismatched_songs = []
-    for song in tqdm(songs):
+    length_mismatch_songs = []
+    notes_mismatch_songs = []
+    for song in songs:
         files = os.listdir(os.path.join(songs_dir, song))
         # Only keep the json files
-        files = [f for f in files if os.path.splitext(f)[1] == '.json' or os.path.splitext(f)[1] == '.txt']
+        files = filter_files(files)
+        # Check the number of difficulties
+        if len(files) < 2:
+            print(f'{song} has less than 2 difficulties.')
+            continue
+        # Attempt to extract the notes from the json files and compare them
         try:
-            notes_list = [extract_one(load_json(os.path.join(songs_dir, song, f))) for f in files]
-            assert len(notes_list) > 1, f'{song} has less than 2 difficulties.'
+            same, message, notes_list = compare_difficulty([os.path.join(songs_dir, song, f) for f in files])
         except Exception as e:
             print(f'Error reading {song}: {e}')
             continue
-        # Compare the i-th difficulty with the (i+1)-th difficulty
-        for i in range(len(notes_list) - 1):
-            if not is_equal(notes_list[i], notes_list[i + 1]):
-                mismatched_songs.append(song)
-                # print(f'{song} has different notes between {files[i]} and {files[i + 1]}')
+        if message.startswith('Length mismatch'):
+            # print(f'{song} {message}')
+            length_mismatch_songs.append(song)
+        if message.startswith('Notes mismatch'):
+            # print(f'{song} {message}')
+            notes_mismatch_songs.append(song)
+        # Attempt to convert the notes to midi
+        try:
+            for notes in notes_list:
+                _ = list_to_midi(notes)
+        except Exception as e:
+            print(f'Error converting {song}: {e}')
+            continue
     # Deduplicate the mismatched songs
-    mismatched_songs = list(set(mismatched_songs))
+    length_mismatch_songs = list(set(length_mismatch_songs))
+    notes_mismatch_songs = list(set(notes_mismatch_songs))
     print('Comparison done.')
-    print(f'{len(mismatched_songs)} songs have different notes between difficulties.')
-
-
-def compare_difficulty(song_paths, verbose=False) -> bool:
-    """
-    Checks whether the notes of different difficulties of a single song are the same.
-
-    :param song_paths: A list of paths to the json files of the different difficulties of a single song.
-    :param verbose: Whether to print the mismatched notes.
-    :return: True if the notes are the same, False otherwise.
-    """
-    notes_list = [extract_one(load_json(song_path)) for song_path in song_paths]
-    # Compare the i-th difficulty with the (i+1)-th difficulty
-    for i in range(len(notes_list) - 1):
-        if not is_equal(notes_list[i], notes_list[i + 1]):
-            if verbose:
-                print(f'{song_paths[i]} and {song_paths[i + 1]} have different notes.')
-            return False
-    return True
+    print(f'{len(length_mismatch_songs)}/{len(songs)} ({len(length_mismatch_songs) / len(songs) * 100:.2f}%) songs '
+          f'have difficulties with different lengths.')
+    print(f'{len(notes_mismatch_songs)}/{len(songs)} ({len(notes_mismatch_songs) / len(songs) * 100:.2f}%) songs '
+          f'have difficulties with different notes.')
+    return length_mismatch_songs, notes_mismatch_songs
 
 
 def extract_songs(songs_dir, output_dir, one_only=False):
@@ -208,55 +246,42 @@ def extract_songs(songs_dir, output_dir, one_only=False):
     for song in tqdm(songs):
         files = os.listdir(os.path.join(songs_dir, song))
         # Only keep the json files
-        files = [f for f in files if os.path.splitext(f)[1] == '.json' or os.path.splitext(f)[1] == '.txt']
+        files = filter_files(files)
         if len(files) < 2:
             print(f'Skipping {song} because it has less than 2 difficulties.')
             continue
-        file_paths = [os.path.join(songs_dir, song, f) for f in files]
         try:
-            if one_only or compare_difficulty(file_paths):
-                # If the notes are the same, we only need to convert one of the difficulties
-                notes = extract_one(load_json(file_paths[0]))
-                midi = list_to_midi(notes)
+            same, _, notes_list = compare_difficulty([os.path.join(songs_dir, song, f) for f in files])
+            if one_only or same:
+                # If the notes are the same, we save the one with the most number of notes
+                max_notes = max(notes_list, key=len)
+                midi = list_to_midi(max_notes)
                 midi.save(os.path.join(output_dir, f'{song}.mid'))
             else:
                 # If the notes are different, we need to convert all the difficulties
-                for f in files:
-                    notes = extract_one(load_json(os.path.join(songs_dir, song, f)))
+                for i, notes in enumerate(notes_list):
                     midi = list_to_midi(notes)
-                    midi.save(os.path.join(output_dir, f'{os.path.splitext(f)[0]}.mid'))
+                    midi.save(os.path.join(output_dir, f'{os.path.splitext(files[i])[0]}.mid'))
         except Exception as e:
             print(f'Error converting {song}: {e}')
-
-
-def test():
-    # with open('../songs/hard.json.json', 'r') as f:
-    #     hard = json.load(f)
-
-    # with open('../songs/easy.json.json', 'r') as f:
-    #     easy = json.load(f)
-
-    # hard_notes = deemo_to_list(hard)
-    # midi = list_to_midi(hard_notes)
-    # midi.save('test.mid')
-    # easy_notes = deemo_to_list(easy)
-    # print(is_equal(hard_notes, easy_notes))
-
-    compare_difficulty_old('../songs')
-
-    # extract_songs('../songs', './converted/one_only', one_only=True)
-
-    with open('../songs5/easy.json.txt', 'r') as f:
-        easy = json.load(f)
-
-    notes = extract_one(easy)
-    midi = list_to_midi(notes)
-    midi.save('test.mid')
+            continue
 
 
 def main():
-    test()
+    # # Single song test
+    # with open('../songs5/hard.json', 'r') as f:
+    #     deemo_notes = json.load(f)
+    # notes = extract_one(deemo_notes)
+    # midi = list_to_midi(notes)
+    # midi.save('test.mid')
 
+    # # Check the songs
+    # _ = check_songs('../songs5')
+
+    # Extract the songs
+    extract_songs('../songs5', './extracted/one_only', one_only=True)
+
+    pass
 
 if __name__ == '__main__':
     main()
