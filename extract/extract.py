@@ -183,12 +183,14 @@ def compare_difficulty(song_paths) -> Tuple[bool, str, List[List[list]]]:
     return True, 'Notes are equal.', notes_list
 
 
-def check_songs(songs_dir) -> Tuple[List[str], List[str]]:
+def check_songs(songs_dir, suppress_length, suppress_notes) -> Tuple[List[str], List[str]]:
     """
     Iterates through all the songs in the directory and compares the notes of different difficulties
     to see if they are the same.
 
     :param songs_dir: The directory containing the Deemo songs.
+    :param suppress_length: Whether to suppress the length mismatch messages.
+    :param suppress_notes: Whether to suppress the notes mismatch messages.
     :return: A tuple of (List[str], List[str]), where the first element is a list of songs that have difficulties
              with different lengths, and the second element is a list of songs that have difficulties with different
              notes.
@@ -212,10 +214,12 @@ def check_songs(songs_dir) -> Tuple[List[str], List[str]]:
             messages.append(f'{song} Read error: {e}')
             continue
         if message.startswith('Length mismatch'):
-            messages.append(f'{song} {message}')
+            if not suppress_length:
+                messages.append(f'{song} {message}')
             length_mismatch_songs.append(song)
         if message.startswith('Notes mismatch'):
-            messages.append(f'{song} {message}')
+            if not suppress_notes:
+                messages.append(f'{song} {message}')
             notes_mismatch_songs.append(song)
         # Attempt to convert the notes to midi
         try:
@@ -287,9 +291,18 @@ def main():
                        help='Extract all the Deemo songs in the directory to midi files.')
     # One only flag
     parser.add_argument('--one_only', action='store_true', required=False,
-                        help='Only convert one difficulty to midi even if the notes are not the same. '
+                        help='Only convert one difficulty to midi even if '
+                             'the notes are not the same when using --extract. '
                              'Uses the difficulty with the most number of notes. '
                              'In case of a tie, any one may be chosen. '
+                             'Defaults to False.')
+    # Suppress length flag
+    parser.add_argument('--suppress_length', action='store_true', required=False,
+                        help='Suppress the length mismatch messages when using --check. '
+                             'Defaults to False.')
+    # Suppress notes flag
+    parser.add_argument('--suppress_notes', action='store_true', required=False,
+                        help='Suppress the notes mismatch messages when using --check. '
                              'Defaults to False.')
     args = parser.parse_args()
 
@@ -299,7 +312,7 @@ def main():
         midi = list_to_midi(notes)
         midi.save(args.single[1])
     elif args.check:
-        _ = check_songs(args.check[0])
+        _ = check_songs(args.check[0], args.suppress_length, args.suppress_notes)
     elif args.extract:
         extract_songs(args.extract[0], args.extract[1], one_only=args.one_only)
     else:
