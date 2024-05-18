@@ -51,9 +51,11 @@ def extract_one(deemo: dict) -> list:
             pitch = sound['p']
             # Handle v lower than 0
             # For some reason, there are notes with velocity lower than 0.
-            # It is assumed that they don't make any sound, so we set them to 0.
+            # It is assumed that they don't make any sound, so we skip them.
             # However, if this assumption is wrong, then the velocity of these notes would be wrong.
-            velocity = sound['v'] if 0 <= sound['v'] <= 127 else 0
+            if sound['v'] <= 0:
+                continue
+            velocity = sound['v']
             converted_notes.append([on_time, off_time, pitch, velocity])
     # Sort the notes by on_time, then by ascending pitch
     converted_notes.sort(key=lambda x: (x[0], x[2]))
